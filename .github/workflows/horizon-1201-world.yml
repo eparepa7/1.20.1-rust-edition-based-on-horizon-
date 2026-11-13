@@ -1,0 +1,135 @@
+name: Horizon 1.20.1 1.20.1 world checks
+
+on:
+  push:
+    branches: [main, master, mc-1201-dev]
+    paths:
+      - 'crates/horizon-world/src/legacy_1_20_1_*.rs'
+      - 'crates/horizon-world/src/lib.rs'
+      - 'crates/horizon-assets/src/legacy_1_20_1_*.rs'
+      - 'crates/horizon-assets/src/lib.rs'
+      - 'tests/legacy1201_aquifer_*.py'
+      - 'tests/test_legacy1201_aquifer_*.py'
+      - 'tests/test_legacy1201_block_behavior.py'
+      - 'tests/test_legacy1201_assets.py'
+      - 'tests/test_legacy1201_anvil.py'
+      - 'tests/test_legacy1201_terrain.py'
+      - 'tests/test_legacy1201_entity.py'
+      - 'crates/horizon-protocol/src/legacy_1_20_1_*.rs'
+      - 'crates/horizon-protocol/src/lib.rs'
+      - 'tests/test_legacy1201_protocol.py'
+      - 'tests/test_legacy1201_e2e.py'
+      - '.github/workflows/horizon-1201-world.yml'
+      - 'tools/horizon_1201_ci_report.py'
+      - 'tools/check_public_tree.py'
+      - 'tests/test_horizon_1201_ci_report.py'
+      - 'tests/test_horizon_1201_public_tree_gate.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: Horizon 1.20.1-1201-world-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Keep this check mandatory. A prohibited file must make the workflow red,
+  # but must not prevent us from learning whether the Rust code compiles.
+  public-tree:
+    name: Reject private game files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Reject bundled game data and decompiled files
+        run: python3 tools/check_public_tree.py
+      - name: Report forbidden paths (without changing the failing gate)
+        if: always()
+        run: python3 tools/horizon_1201_ci_report.py --public-tree
+
+  # No 'needs: public-tree': execute Rust tests even if the gate rejects a path.
+  # The whole workflow still FAILS when the independent public-tree job fails.
+  world-rust:
+    name: Compile and test horizon-world and horizon-assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: Horizon 1.20.1-1201-world
+      # Continue to the regression suite even if the filtered 1.20.1 tests
+      # fail: two independent results make diagnosing 26.3 regressions easier.
+      # Exit nonzero if EITHER test fails. Never make a red build green.
+      - name: Run 1.20.1 and existing-world Rust tests (capture both failures)
+        id: rust
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/Horizon 1.20.1-1201"
+          cargo test --locked -p horizon-assets --lib legacy_1_20_1 2>&1 | tee "$RUNNER_TEMP/Horizon 1.20.1-1201/assets.log"
+          rcassets=${PIPESTATUS[0]}
+          cargo test --locked -p horizon-world --lib legacy_1_20_1 2>&1 | tee "$RUNNER_TEMP/Horizon 1.20.1-1201/1201.log"
+          rc1201=${PIPESTATUS[0]}
+          cargo test --locked -p horizon-protocol --lib legacy_1_20_1 2>&1 | tee "$RUNNER_TEMP/Horizon 1.20.1-1201/protocol.log"
+          rcprotocol=${PIPESTATUS[0]}
+          cargo test --locked -p horizon-world --lib 2>&1 | tee "$RUNNER_TEMP/Horizon 1.20.1-1201/world-regression.log"
+          rcregression=${PIPESTATUS[0]}
+          echo "rassets=$rcassets" >> "$GITHUB_OUTPUT"
+          echo "r1201=$rc1201" >> "$GITHUB_OUTPUT"
+          echo "rprotocol=$rcprotocol" >> "$GITHUB_OUTPUT"
+          echo "regression=$rcregression" >> "$GITHUB_OUTPUT"
+          if (( rcassets != 0 || rc1201 != 0 || rcregression != 0 || rcprotocol != 0 )); then
+            exit 1
+          fi
+      - name: Publish Rust failure locations in job summary
+        if: always()
+        shell: bash
+        run: |
+          python3 tools/horizon_1201_ci_report.py \
+            --rust-log "assets:$RUNNER_TEMP/Horizon 1.20.1-1201/assets.log" \
+            --status "assets=${{ steps.rust.outputs.rassets }}" \
+            --rust-log "1.20.1:$RUNNER_TEMP/Horizon 1.20.1-1201/1201.log" \
+            --status "1.20.1=${{ steps.rust.outputs.r1201 }}" \
+            --rust-log "world-regression:$RUNNER_TEMP/Horizon 1.20.1-1201/world-regression.log" \
+            --status "world-regression=${{ steps.rust.outputs.regression }}" \
+            --rust-log "protocol:$RUNNER_TEMP/Horizon 1.20.1-1201/protocol.log" \
+            --status "protocol=${{ steps.rust.outputs.rprotocol }}"
+      - name: Save compiler logs for debugging (no game data)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Horizon 1.20.1-1201-rust-errors-${{ github.run_id }}
+          path: ${{ runner.temp }}/Horizon 1.20.1-1201/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  reference-models:
+    name: Run independent aquifer reference models
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Check arithmetic and cache reference models
+        run: |
+          python3 tests/legacy1201_aquifer_boundary_qa.py
+          python3 tests/legacy1201_aquifer_pressure_qa.py
+          python3 -m unittest discover -s tests -p 'test_legacy1201_aquifer_*.py' -v
+          python3 -m unittest discover -s tests -p 'test_legacy1201_block_behavior.py' -v
+          python3 -m unittest discover -s tests -p 'test_legacy1201_assets.py' -v
+          python3 -m unittest discover -s tests -p 'test_legacy1201_anvil.py' -v
+          python3 -m unittest discover -s tests -p 'test_legacy1201_terrain.py' -v
+          python3 -m unittest discover -s tests -p 'test_legacy1201_entity.py' -v
+          python3 -m unittest discover -s tests -p 'test_legacy1201_protocol.py' -v
+          python3 -m unittest discover -s tests -p 'test_legacy1201_e2e.py' -v
+          python3 -m unittest discover -s tests -p 'test_horizon_1201_ci_report.py' -v
+          python3 -m unittest discover -s tests -p 'test_horizon_1201_public_tree_gate.py' -v

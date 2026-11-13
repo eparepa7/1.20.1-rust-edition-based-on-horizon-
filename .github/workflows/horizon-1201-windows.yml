@@ -1,0 +1,104 @@
+name: Horizon 1.20.1 Windows
+
+on:
+  push:
+    branches: [main, master, mc-1201-dev]
+  workflow_dispatch:
+    inputs:
+      game_tag:
+        description: 'Signed Horizon engine to bundle (latest, or a compatible release tag)'
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: horizon-1201-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+      HORIZON_LAUNCHER_VERSION: 1.0.0-beta.1
+      HORIZON_LAUNCHER_NO_SELF_UPDATE: '1'
+      HORIZON_NO_AUDIO: '1'
+      HORIZON_NO_KEYCHAIN: '1'
+      HORIZON_TELEMETRY_URL: 'off'
+      HORIZON_HOME: ${{ github.workspace }}/.horizon-ci/game
+      HORIZON_LAUNCHER_HOME: ${{ github.workspace }}/.horizon-ci/launcher
+      HORIZON_LAUNCHER_LOCATION_FILE: ${{ github.workspace }}/.horizon-ci/location.json
+      HORIZON_LAUNCHER_TRASH: ${{ github.workspace }}/.horizon-ci/trash
+      HORIZON_LAUNCHER_CLIPBOARD: ${{ github.workspace }}/.horizon-ci/clipboard
+      HORIZON_LAUNCHER_DESKTOP: ${{ github.workspace }}/.horizon-ci/desktop
+      XDG_DATA_HOME: ${{ github.workspace }}/.horizon-ci/xdg-data
+      XDG_CONFIG_HOME: ${{ github.workspace }}/.horizon-ci/xdg-config
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher
+          key: horizon-1201-windows-x64
+      - name: Check source formatting and publication boundary
+        run: |
+          cargo fmt --manifest-path launcher/Cargo.toml --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_public_tree.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p test_horizon_1201_package.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p test_version_port.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p test_gen_version_consts.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check launcher
+        run: |
+          cargo clippy --release --locked --manifest-path launcher/Cargo.toml --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test launcher including offline and authenticated policies
+        run: |
+          cargo test --release --locked --manifest-path launcher/Cargo.toml --lib --bins --tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build Windows launcher
+        run: |
+          cargo build --release --locked --manifest-path launcher/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_pe_arch.py x64 launcher/target/release/horizon-launcher.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_imports.py launcher/target/release/horizon-launcher.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Stage portable launcher
+        run: |
+          New-Item -ItemType Directory -Force dist/Horizon 1.20.1-Rust-Dev | Out-Null
+          Copy-Item launcher/target/release/horizon-launcher.exe dist/Horizon 1.20.1-Rust-Dev/horizon-launcher.exe
+          Set-Content -Encoding utf8 dist/Horizon 1.20.1-Rust-Dev/horizon-portable.txt 'Keep this file beside horizon-launcher.exe.'
+          Copy-Item docs/Horizon 1.20.1-RU.md dist/Horizon 1.20.1-Rust-Dev/START-HERE-RU.md
+          Copy-Item LICENSE,THIRD_PARTY_NOTICES.md dist/Horizon 1.20.1-Rust-Dev/
+      - name: Bundle the signed engine (no Minecraft assets or account)
+        env:
+          GAME_TAG: ${{ inputs.game_tag || 'latest' }}
+          HORIZON_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $env:HORIZON_LAUNCHER_HOME = Join-Path $PWD 'dist/Horizon 1.20.1-Rust-Dev/data/launcher'
+          $env:HORIZON_HOME = Join-Path $env:RUNNER_TEMP 'Horizon 1.20.1-bundle-game'
+          & ./dist/Horizon 1.20.1-Rust-Dev/horizon-launcher.exe install $env:GAME_TAG
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/horizon_1201_package.py dist/Horizon 1.20.1-Rust-Dev
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Horizon 1.20.1-Rust-Dev-Windows-x64
+          path: dist/Horizon 1.20.1-Rust-Dev/
+          if-no-files-found: error
+          retention-days: 30

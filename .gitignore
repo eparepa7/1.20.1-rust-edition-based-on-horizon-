@@ -1,0 +1,78 @@
+# === Сборка и кэш Rust (Cargo) ===
+/target/
+**/*.rs.bk
+*.pdb
+
+# === Личные настройки IDE и редакторов ===
+.idea/
+.vscode/
+*.iml
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*~
+
+# === Секреты, токены и локальные конфиги ===
+.env
+.env.*
+!.env.example
+*.local
+*.local.json
+*.local.toml
+*.key
+*.pem
+secrets/
+
+# === Системный мусор ОС ===
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# === Логи, временные файлы и личные заметки ===
+*.log
+logs/
+tmp/
+temp/
+notes/
+todo.txt
+saves/
+crash-reports/
+
+# === Python кэш и виртуальные окружения ===
+**/__pycache__/
+*.py[cod]
+/.venv/
+
+# === Игровые файлы Mojang и артефакты профилирования ===
+/.local/
+*.jar
+*.class
+*.jfr
+*.hprof
+/decompiled/
+/minecraft/
+/assets/
+/run/
+/dist/
+/mods/horizon/build/
+/backups/
+/tools/logs/
+/exporters/
+
+# === Локальное рабочее состояние клиента при запуске из корня ===
+/options.txt
+/debug-profile.json
+/horizon.txt
+/horizon-graphics.txt
+/horizon-controller.txt
+/horizon-extras.txt
+/horizon-player.txt
+/servers.dat
+/screenshots/
+/.horizon-cache/
+/debug/
+
+# === Изолированное состояние Windows CI ===
+/.horizon-ci/
